@@ -54,6 +54,9 @@ export class BubbleGame extends Component {
   private combo = 0;
   private level = 1;
   private reservedClone = false;
+  private modeButtons: Node[] = [];
+  private toast!: Label;
+  private lastShotTime = 0;
 
   start() { this.buildUI(); this.reset(); }
 
@@ -86,9 +89,12 @@ export class BubbleGame extends Component {
     this.scoreLabel = this.makeLabel('Score', -180, 322, 11, '#475467'); this.root.addChild(this.scoreLabel.node);
     this.comboLabel = this.makeLabel('Combo', 175, 322, 11, '#475467'); this.root.addChild(this.comboLabel.node);
 
-    this.button('BOMB', -145, 270, () => this.setMode('bomb'));
-    this.button('STONE', 0, 270, () => this.setMode('stone'));
-    this.button('CLONE', 145, 270, () => this.setMode('clone'));
+    this.modeButtons = [
+      this.button('BOMB', -145, 270, () => this.setMode('bomb')),
+      this.button('STONE', 0, 270, () => this.setMode('stone')),
+      this.button('CLONE', 145, 270, () => this.setMode('clone'))
+    ];
+    this.toast = this.makeLabel('Toast', 0, -245, 11, '#344054'); this.toast.string = 'AIM · DRAG · RELEASE'; this.root.addChild(this.toast.node);
     this.button('RESTART', 0, -325, () => this.reset());
     this.button('HOLD', 150, -285, () => this.holdClone());
 
@@ -112,10 +118,15 @@ export class BubbleGame extends Component {
     g.fillColor.fromHEX('#FFFFFF'); g.roundRect(-55, -16, 110, 32, 8); g.fill();
     g.strokeColor.fromHEX('#D0D5DD'); g.lineWidth = 1; g.roundRect(-55, -16, 110, 32, 8); g.stroke();
     const l = n.addComponent(Label); l.string = text; l.fontSize = 11; l.color.fromHEX('#344054');
-    n.position = new Vec3(x, y); this.root.addChild(n); n.on(Node.EventType.TOUCH_END, fn);
+    n.position = new Vec3(x, y); this.root.addChild(n); n.on(Node.EventType.TOUCH_END, () => { this.buttonPulse(n); fn(); }); return n;
   }
 
-  private setMode(mode: Mode) { this.mode = mode; this.reset(); }
+  private buttonPulse(n: Node) {
+    n.setScale(0.94, 0.94, 1);
+    this.scheduleOnce(() => n.setScale(1, 1, 1), 0.09);
+  }
+
+  private setMode(mode: Mode) { this.mode = mode; this.reset(); this.toast.string = `${mode.toUpperCase()} · READY`; this.buttonPulse(this.modeButtons[mode === 'bomb' ? 0 : mode === 'stone' ? 1 : 2]); }
 
   private reset() {
     this.balls.forEach(b => b.node.destroy()); this.balls = []; this.map.clear();
@@ -132,7 +143,14 @@ export class BubbleGame extends Component {
     }
     this.shooter = this.mode === 'bomb' ? 'bomb' : this.mode === 'clone' ? 'clone' : NORMAL[0];
     this.nextShooter = NORMAL[1];
-    this.drawLauncher();
+    this.drawLauncher(); this.drawAim(); this.animateBoardIn(); this.updateHud();
+  }
+
+  private animateBoardIn() {
+    this.balls.forEach((b, i) => {
+      b.node.setScale(0.72, 0.72, 1);
+      this.scheduleOnce(() => { if (b.node.isValid) b.node.setScale(1, 1, 1); }, 0.012 * i);
+    });
   }
 
   private initial(r: number, c: number): Kind {
@@ -179,7 +197,7 @@ export class BubbleGame extends Component {
     const x = p.x - size.width / 2, y = p.y - size.height / 2;
     this.angle = Math.atan2(y - SHOOT_Y, x);
     this.angle = Math.max(0.28, Math.min(Math.PI - 0.28, this.angle));
-    this.drawAim(); this.aiming = true;
+    this.drawAim(); this.aiming = true; this.toast.string = 'RELEASE · FIRE';
   }
 
   private drawAim() {
@@ -197,7 +215,7 @@ export class BubbleGame extends Component {
 
   private shoot() {
     if (!this.aiming || this.shotActive) return;
-    this.aiming = false; this.aim.clear(); this.shotActive = true;
+    this.aiming = false; this.aim.clear(); this.shotActive = true; this.lastShotTime = Date.now(); this.toast.string = 'SHOT IN FLIGHT';
     this.shotX = 0; this.shotY = SHOOT_Y; this.shotVX = Math.cos(this.angle) * 7; this.shotVY = Math.sin(this.angle) * 7;
     this.shotNode = new Node('Shot'); const g = this.shotNode.addComponent(Graphics);
     g.fillColor.fromHEX(COLORS[this.shooter]); g.circle(0,0,R); g.fill(); this.root.addChild(this.shotNode);
@@ -216,7 +234,7 @@ export class BubbleGame extends Component {
     this.reservedClone = false;
     this.nextShooter = NORMAL[(this.score + this.level) % NORMAL.length];
     if (this.score >= this.level * 100) this.level++;
-    this.drawLauncher(); this.updateHud();
+    this.drawLauncher(); this.updateHud(); this.toast.string = this.combo > 0 ? `COMBO x${this.combo} · NICE` : 'AIM · DRAG · RELEASE';
   }
 
   private findAttachCell(x:number, y:number, hit:Ball|null): [number,number] | null {
@@ -288,7 +306,7 @@ export class BubbleGame extends Component {
   private remove(b:Ball){b.alive=false;this.map.delete(this.key(b.row,b.col));b.node.destroy();}
   private flash(x:number,y:number){
     this.fx.clear(); this.fx.strokeColor.fromHEX('#FFFFFF'); this.fx.lineWidth=4; this.fx.circle(x,y,30); this.fx.stroke();
-    this.scheduleOnce(()=>this.fx.clear(),0.08);
+    this.scheduleOnce(()=>this.fx.clear(),0.12);
   }
   private updateHud(){
     this.scoreLabel.string=`SCORE ${String(this.score).padStart(4,'0')}`;
