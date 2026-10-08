@@ -1,0 +1,7 @@
+{
+  "name": "bubble-casual-lab",
+  "version": "0.1.0",
+  "description": "Cocos Creator casual game level-design experiments",
+  "author": "1parado",
+  "main": "assets/scripts/BubbleGame.ts"
+}
