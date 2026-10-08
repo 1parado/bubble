@@ -1,0 +1,10 @@
+library/
+local/
+temp/
+build/
+build-templates/
+profiles/
+settings/
+*.log
+.DS_Store
+Thumbs.db
