@@ -19,3 +19,14 @@ Suggested progression: clone a small group -> clone near a bomb -> clone + stone
 
 ## Evaluation
 Can the player understand the element without text? Does placement change the best shot? Is the payoff visible immediately? Is there a meaningful alternative action? Does the element create a new decision rather than only more numbers?
+
+## Iteration 2 — Hex-grid placement
+
+The prototype now uses explicit staggered hex-neighbor relationships rather than distance-only matching. Each shot resolves to an adjacent empty cell around the first collision, so placement becomes a level-design variable instead of a visual approximation.
+
+### Design impact
+- Bomb: adjacency determines blast value.
+- Stone: barriers create real route decisions.
+- Clone: the value of cloning depends on nearby color cells.
+
+This is the first step toward authored, testable level layouts.
