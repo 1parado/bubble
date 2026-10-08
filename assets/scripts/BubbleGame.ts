@@ -27,6 +27,29 @@ interface Ball {
   alive: boolean;
 }
 
+interface LevelDef {
+  id: number;
+  name: string;
+  mode: Mode;
+  specials: [number, number][];
+  goal: string;
+}
+
+// Mirrors assets/levels/levels.json — kept in code so the prototype still runs
+// without a resources bundle. Edit levels.json first, then sync this table.
+const LEVELS: LevelDef[] = [
+  { id: 1, name: 'Bomb Intro', mode: 'bomb', specials: [[3, 3]], goal: 'Make one safe bomb shot.' },
+  { id: 2, name: 'Double Burst', mode: 'bomb', specials: [[3, 3], [4, 7]], goal: 'Choose the higher-value explosion.' },
+  { id: 3, name: 'Stone Gate', mode: 'stone', specials: [[3, 3], [3, 4], [3, 5], [3, 6]], goal: 'Find a route around the barrier.' },
+  { id: 4, name: 'Bank Shot', mode: 'stone', specials: [[3, 2], [3, 3], [3, 4], [3, 5], [3, 6], [3, 7]], goal: 'Use wall bounce to reach the opening.' },
+  { id: 5, name: 'Clone Intro', mode: 'clone', specials: [[4, 4]], goal: 'Clone into a useful color cluster.' },
+  { id: 6, name: 'Save or Spend', mode: 'clone', specials: [[4, 4], [5, 7]], goal: 'Hold the clone until its value increases.' },
+  { id: 7, name: 'Burst + Route', mode: 'bomb', specials: [[3, 2], [3, 7]], goal: 'Open the board with minimal shots.' },
+  { id: 8, name: 'Stone + Clone', mode: 'clone', specials: [[3, 4], [4, 4]], goal: 'Create a cluster through constrained space.' },
+  { id: 9, name: 'Chain Test', mode: 'bomb', specials: [[2, 3], [3, 6], [5, 5]], goal: 'Build a combo from one deliberate detonation.' },
+  { id: 10, name: 'Design Review', mode: 'clone', specials: [[3, 2], [3, 3], [3, 6], [4, 6]], goal: 'Balance route, timing and payoff in one board.' }
+];
+
 @ccclass('BubbleGame')
 export class BubbleGame extends Component {
   private root!: Node;
@@ -40,7 +63,6 @@ export class BubbleGame extends Component {
   private comboLabel!: Label;
   private balls: Ball[] = [];
   private map = new Map<string, Ball>();
-  private mode: Mode = 'bomb';
   private shooter: Kind = 'red';
   private nextShooter: Kind = 'blue';
   private angle = Math.PI / 2;
@@ -53,10 +75,13 @@ export class BubbleGame extends Component {
   private shotVY = 0;
   private score = 0;
   private combo = 0;
+  private levelIndex = 0;
   private level = 1;
+  private cleared = false;
   private reservedClone = false;
   private modeButtons: Node[] = [];
   private toast!: Label;
+  private levelLabel!: Label;
   private lastShotTime = 0;
 
   start() { this.buildUI(); this.reset(); }
@@ -91,13 +116,16 @@ export class BubbleGame extends Component {
     this.comboLabel = this.makeLabel('Combo', 175, 322, 11, '#475467'); this.root.addChild(this.comboLabel.node);
 
     this.modeButtons = [
-      this.button('BOMB', -145, 270, () => this.setMode('bomb')),
-      this.button('STONE', 0, 270, () => this.setMode('stone')),
-      this.button('CLONE', 145, 270, () => this.setMode('clone'))
+      this.button('BOMB', -145, 270, () => this.jumpToMode('bomb')),
+      this.button('STONE', 0, 270, () => this.jumpToMode('stone')),
+      this.button('CLONE', 145, 270, () => this.jumpToMode('clone'))
     ];
     this.toast = this.makeLabel('Toast', 0, -245, 11, '#344054'); this.toast.string = 'AIM · DRAG · RELEASE'; this.root.addChild(this.toast.node);
     this.button('RESTART', 0, -325, () => this.reset());
     this.button('HOLD', 150, -285, () => this.holdClone());
+    this.button('◀ PREV', -150, -325, () => this.switchLevel(-1));
+    this.button('NEXT ▶', 150, -325, () => this.switchLevel(1));
+    this.levelLabel = this.makeLabel('Level', -180, 298, 10, '#475467'); this.root.addChild(this.levelLabel.node);
 
     this.aim = this.root.addComponent(Graphics);
     this.launcher = this.root.addComponent(Graphics);
@@ -121,7 +149,7 @@ export class BubbleGame extends Component {
     g.fillColor.fromHEX('#FFFFFF'); g.roundRect(-55, -16, 110, 32, 8); g.fill();
     g.strokeColor.fromHEX('#D0D5DD'); g.lineWidth = 1; g.roundRect(-55, -16, 110, 32, 8); g.stroke();
     const l = n.addComponent(Label); l.string = text; l.fontSize = 11; l.color.fromHEX('#344054');
-    n.position = new Vec3(x, y); this.root.addChild(n); n.on(Node.EventType.TOUCH_END, () => { this.buttonPulse(n); fn(); }); return n;
+    n.position = new Vec3(x, y); this.root.addChild(n); n.on(Node.EventType.TOUCH_END, (e: any) => { e.propagationStopped = true; this.buttonPulse(n); fn(); }); return n;
   }
 
   private buttonPulse(n: Node) {
@@ -140,26 +168,32 @@ export class BubbleGame extends Component {
       .start();
   }
 
-  private setMode(mode: Mode) {
-    this.mode = mode; this.reset(); this.toast.string = `${mode.toUpperCase()} · READY`;
-    this.buttonPulse(this.modeButtons[mode === 'bomb' ? 0 : mode === 'stone' ? 1 : 2]);
+  private jumpToMode(mode: Mode) {
+    const idx = LEVELS.findIndex(l => l.mode === mode);
+    if (idx < 0 || idx === this.levelIndex) return;
+    this.levelIndex = idx; this.reset();
+  }
+
+  private switchLevel(dir: number) {
+    const idx = Math.max(0, Math.min(LEVELS.length - 1, this.levelIndex + dir));
+    if (idx === this.levelIndex) return;
+    this.levelIndex = idx; this.reset();
   }
 
   private reset() {
+    const def = LEVELS[this.levelIndex];
+    this.level = def.id; this.cleared = false;
     this.balls.forEach(b => b.node.destroy()); this.balls = []; this.map.clear();
-    this.score = 0; this.combo = 0; this.level = 1; this.reservedClone = false; this.shotActive = false;
+    this.score = 0; this.combo = 0; this.reservedClone = false; this.shotActive = false;
     this.focus.clear(); this.fx.clear();
-    const hints: Record<Mode, string> = {
-      bomb: 'BOMB · 用爆炸打开高价值连锁',
-      stone: 'STONE · 障碍改变最佳路线',
-      clone: 'CLONE · 现在用，还是先保存？'
-    };
-    this.hint.string = hints[this.mode];
+    this.hint.string = `${def.name.toUpperCase()} · ${def.goal}`;
+    this.levelLabel.string = `LV ${def.id}/${LEVELS.length} · ${def.name}`;
     this.scoreLabel.string = 'SCORE 0000'; this.comboLabel.string = 'COMBO x0';
-    for (let r = 0; r < 7 + Math.min(this.level, 3); r++) {
+    this.toast.string = 'AIM · DRAG · RELEASE';
+    for (let r = 0; r < 7 + Math.floor(this.levelIndex / 3); r++) {
       for (let c = 0; c < COLS; c++) this.addBall(this.initial(r, c), r, c);
     }
-    this.shooter = this.mode === 'bomb' ? 'bomb' : this.mode === 'clone' ? 'clone' : NORMAL[0];
+    this.shooter = def.mode === 'bomb' ? 'bomb' : def.mode === 'clone' ? 'clone' : NORMAL[0];
     this.nextShooter = NORMAL[1];
     this.drawLauncher(); this.drawAim(); this.animateBoardIn(); this.updateHud();
   }
@@ -176,10 +210,9 @@ export class BubbleGame extends Component {
   }
 
   private initial(r: number, c: number): Kind {
-    if (this.mode === 'bomb' && ((r === 3 && c === 3) || (r === 4 && c === 7))) return 'bomb';
-    if (this.mode === 'stone' && ((r === 3 && c >= 2 && c <= 7) || (r === 4 && c === 5))) return 'stone';
-    if (this.mode === 'clone' && ((r === 4 && c === 4) || (r === 5 && c === 7))) return 'clone';
-    return NORMAL[(r * 2 + c + this.level) % NORMAL.length];
+    const def = LEVELS[this.levelIndex];
+    if (def.specials.some(([sr, sc]) => sr === r && sc === c)) return def.mode;
+    return NORMAL[(r * 2 + c + this.levelIndex) % NORMAL.length];
   }
 
   private key(r: number, c: number) { return `${r}:${c}`; }
@@ -271,16 +304,28 @@ export class BubbleGame extends Component {
     this.shooter = this.reservedClone ? 'clone' : this.nextShooter;
     this.reservedClone = false;
     this.nextShooter = NORMAL[(this.score + this.level) % NORMAL.length];
-    if (this.score >= this.level * 100) this.level++;
     this.drawLauncher(); this.updateHud(); this.toast.string = this.combo > 0 ? `COMBO x${this.combo} · NICE` : 'AIM · DRAG · RELEASE';
   }
 
   private findAttachCell(x:number, y:number, hit:Ball|null): [number,number] | null {
-    if (!hit) return [0, Math.max(0, Math.min(COLS-1, Math.round((x-LEFT)/DX)))];
-    const candidates = this.neighbors(hit.row, hit.col)
-      .filter(([r,c]) => !this.map.get(this.key(r,c))?.alive);
-    candidates.sort((a,b) => Math.hypot(this.xOf(a[0],a[1])-x,this.yOf(a[0])-y) - Math.hypot(this.xOf(b[0],b[1])-x,this.yOf(b[0])-y));
-    return candidates[0] ?? null;
+    const dist = (rc:[number,number]) => Math.hypot(this.xOf(rc[0],rc[1]) - x, this.yOf(rc[0]) - y);
+    let candidates:[number,number][] = [];
+    if (hit) {
+      candidates = this.neighbors(hit.row, hit.col)
+        .filter(([r,c]) => !this.map.get(this.key(r,c))?.alive);
+    }
+    if (!candidates.length) {
+      // Fallback (e.g. ceiling hit with row 0 occupied): pick the nearest free
+      // cell so the shot always lands somewhere valid instead of vanishing.
+      for (let r = 0; r < ROWS; r++) {
+        for (let c = 0; c < COLS; c++) {
+          if (!this.map.get(this.key(r,c))?.alive) candidates.push([r,c]);
+        }
+      }
+      if (!candidates.length) return null;
+    }
+    candidates.sort((a,b) => dist(a) - dist(b));
+    return candidates[0];
   }
 
   private resolveMatch(center:Ball) {
@@ -289,7 +334,8 @@ export class BubbleGame extends Component {
     if (cluster.length < 3) { this.combo = 0; return; }
     cluster.forEach((b, i) => this.remove(b, 0.045 * i));
     this.combo++; this.score += cluster.length * 10 * this.combo;
-    this.dropUnsupported(); this.flash(this.xOf(center.row,center.col),this.yOf(center.row)); this.comboBurst(cluster.length, this.xOf(center.row, center.col), this.yOf(center.row)); this.updateHud();
+    const pts = cluster.length * 10 * this.combo;
+    this.dropUnsupported(); this.flash(this.xOf(center.row,center.col),this.yOf(center.row)); this.comboBurst(cluster.length, pts, this.xOf(center.row, center.col), this.yOf(center.row)); this.updateHud();
   }
 
   private sameColorCluster(start:Ball) {
@@ -313,8 +359,8 @@ export class BubbleGame extends Component {
       this.remove(b, 0.08 + 0.035 * i);
     });
     this.remove(center, 0.02);
-    this.combo++; this.score += (targets.length+1)*15*this.combo;
-    this.dropUnsupported(); this.flash(this.xOf(center.row,center.col),this.yOf(center.row)); this.comboBurst(targets.length + 1, this.xOf(center.row,center.col), this.yOf(center.row)); this.updateHud();
+    this.combo++; const pts = (targets.length+1)*15*this.combo; this.score += pts;
+    this.dropUnsupported(); this.flash(this.xOf(center.row,center.col),this.yOf(center.row)); this.comboBurst(targets.length + 1, pts, this.xOf(center.row,center.col), this.yOf(center.row)); this.updateHud();
   }
 
   private clone(center:Ball) {
@@ -330,7 +376,7 @@ export class BubbleGame extends Component {
         this.popOut(clone.node, center.node.position, 0.12 * i);
       });
       this.remove(center, 0.03);
-      this.combo++; this.score += empty.length*12*this.combo; this.comboBurst(empty.length, this.xOf(center.row,center.col), this.yOf(center.row)); this.updateHud();
+      this.combo++; const pts = empty.length*12*this.combo; this.score += pts; this.comboBurst(empty.length, pts, this.xOf(center.row,center.col), this.yOf(center.row)); this.updateHud();
     }, 0.16);
   }
 
@@ -409,9 +455,9 @@ export class BubbleGame extends Component {
     tween(n).to(0.16, { scale: new Vec3(1.8,1.8,1) }).call(()=>n.destroy()).start();
   }
 
-  private comboBurst(count:number,x:number,y:number) {
+  private comboBurst(count:number, points:number, x:number, y:number) {
     this.spawnFloatText(`COMBO x${this.combo}`, x, y + 28, '#111827', 14);
-    this.spawnFloatText(`+${count * 10}`, x, y + 5, '#667085', 12);
+    this.spawnFloatText(`+${points}`, x, y + 5, '#667085', 12);
     if (this.combo >= 2) this.shakeBoard(0.055);
   }
 
@@ -442,6 +488,19 @@ export class BubbleGame extends Component {
   private updateHud(){
     this.scoreLabel.string=`SCORE ${String(this.score).padStart(4,'0')}`;
     this.comboLabel.string=`COMBO x${this.combo}`;
+    if (!this.cleared && this.balls.length > 0 && !this.balls.some(b => b.alive)) this.onLevelClear();
+  }
+
+  private onLevelClear() {
+    this.cleared = true;
+    this.score += 100;
+    this.scoreLabel.string=`SCORE ${String(this.score).padStart(4,'0')}`;
+    this.spawnFloatText('LEVEL CLEAR · +100', 0, 60, '#111827', 16);
+    this.toast.string = this.levelIndex < LEVELS.length - 1 ? `LEVEL ${this.level} CLEAR` : 'ALL LEVELS CLEAR';
+    this.scheduleOnce(() => {
+      if (this.levelIndex < LEVELS.length - 1) { this.levelIndex++; this.reset(); }
+      else this.toast.string = 'ALL LEVELS CLEAR · RESTART TO REPLAY';
+    }, 1.4);
   }
 
   private drawLauncher(){

@@ -14,6 +14,14 @@
 - [ ] HOLD preserves a clone opportunity for a later shot.
 - [ ] Stone remains persistent and changes the available route.
 
+## Levels & progression (v0.2.0)
+- [ ] ◀ PREV / NEXT ▶ switch levels and rebuild the board without leftover nodes.
+- [ ] BOMB / STONE / CLONE buttons jump to level 1 / 3 / 5 respectively.
+- [ ] Each level's special balls match its entry in levels.json (position and kind).
+- [ ] Clearing the whole board shows LEVEL CLEAR · +100 and auto-loads the next level.
+- [ ] Clearing level 10 shows ALL LEVELS CLEAR and stays until RESTART.
+- [ ] A ceiling shot with row 0 occupied still attaches to a free cell (no vanishing shot).
+
 ## UX
 - [ ] Score and combo update after meaningful actions.
 - [ ] Mode buttons reset to a known board state.

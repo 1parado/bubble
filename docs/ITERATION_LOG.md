@@ -12,6 +12,7 @@ This repository intentionally stops after ten focused iterations. Each iteration
 8. **QA checklist** — document deterministic manual tests for placement, special effects and unsupported drops.
 9. **Portfolio packaging** — make the project easy to explain in an interview: mechanic, decision, evidence, next step.
 10. **README showcase** — expose the gameplay image, controls, design intent and iteration result; stop here rather than adding low-value scope.
+11. **Post-stop maintenance (v0.2.0)** — make the authored level data actually drive the game: wire `levels.json` into runtime, add level switching (◀/▶ + mode jump buttons + level HUD), add level-clear detection with auto-advance, fix the attach fallback so shots never vanish on occupied cells, fix combo popup score accuracy, and stop button touch events from leaking to the launcher. No new scope beyond making existing data and mechanics real.
 
 ## Stopping rule
 
