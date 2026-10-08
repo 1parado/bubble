@@ -1,4 +1,4 @@
-import { _decorator, Component, Node, Graphics, Label, Vec3, view } from 'cc';
+import { _decorator, Component, Node, Graphics, Label, Vec3, view, tween } from 'cc';
 
 const { ccclass } = _decorator;
 
@@ -33,6 +33,7 @@ export class BubbleGame extends Component {
   private board!: Node;
   private aim!: Graphics;
   private launcher!: Graphics;
+  private focus!: Graphics;
   private fx!: Graphics;
   private hint!: Label;
   private scoreLabel!: Label;
@@ -100,10 +101,12 @@ export class BubbleGame extends Component {
 
     this.aim = this.root.addComponent(Graphics);
     this.launcher = this.root.addComponent(Graphics);
+    this.focus = this.root.addComponent(Graphics);
     this.fx = this.root.addComponent(Graphics);
     this.root.on(Node.EventType.TOUCH_START, this.pointer, this);
     this.root.on(Node.EventType.TOUCH_MOVE, this.pointer, this);
     this.root.on(Node.EventType.TOUCH_END, this.shoot, this);
+    this.startLauncherBreathing();
   }
 
   private makeLabel(name: string, x: number, y: number, size: number, hex: string) {
@@ -126,11 +129,26 @@ export class BubbleGame extends Component {
     this.scheduleOnce(() => n.setScale(1, 1, 1), 0.09);
   }
 
-  private setMode(mode: Mode) { this.mode = mode; this.reset(); this.toast.string = `${mode.toUpperCase()} · READY`; this.buttonPulse(this.modeButtons[mode === 'bomb' ? 0 : mode === 'stone' ? 1 : 2]); }
+  private startLauncherBreathing() {
+    tween(this.launcher)
+      .repeatForever(
+        tween().sequence(
+          tween().to(0.9, { scale: new Vec3(1.035, 1.035, 1) }),
+          tween().to(0.9, { scale: new Vec3(1, 1, 1) })
+        )
+      )
+      .start();
+  }
+
+  private setMode(mode: Mode) {
+    this.mode = mode; this.reset(); this.toast.string = `${mode.toUpperCase()} · READY`;
+    this.buttonPulse(this.modeButtons[mode === 'bomb' ? 0 : mode === 'stone' ? 1 : 2]);
+  }
 
   private reset() {
     this.balls.forEach(b => b.node.destroy()); this.balls = []; this.map.clear();
     this.score = 0; this.combo = 0; this.level = 1; this.reservedClone = false; this.shotActive = false;
+    this.focus.clear(); this.fx.clear();
     const hints: Record<Mode, string> = {
       bomb: 'BOMB · 用爆炸打开高价值连锁',
       stone: 'STONE · 障碍改变最佳路线',
@@ -149,7 +167,11 @@ export class BubbleGame extends Component {
   private animateBoardIn() {
     this.balls.forEach((b, i) => {
       b.node.setScale(0.72, 0.72, 1);
-      this.scheduleOnce(() => { if (b.node.isValid) b.node.setScale(1, 1, 1); }, 0.012 * i);
+      tween(b.node)
+        .delay(0.012 * i)
+        .to(0.16, { scale: new Vec3(1.08, 1.08, 1) })
+        .to(0.12, { scale: new Vec3(1, 1, 1) })
+        .start();
     });
   }
 
@@ -173,7 +195,7 @@ export class BubbleGame extends Component {
       .filter(([rr, cc]) => rr >= 0 && rr < ROWS && cc >= 0 && cc < COLS);
   }
 
-  private addBall(kind: Kind, r: number, c: number) {
+  private addBall(kind: Kind, r: number, c: number, animated = false) {
     const old = this.map.get(this.key(r, c)); if (old?.alive) return old;
     const n = new Node(kind); const g = n.addComponent(Graphics);
     g.fillColor.fromHEX(COLORS[kind]); g.circle(0, 0, R); g.fill();
@@ -188,7 +210,12 @@ export class BubbleGame extends Component {
     }
     if (kind === 'stone') { g.fillColor.fromHEX('#667085'); g.circle(0,0,5); g.fill(); }
     n.position = new Vec3(this.xOf(r,c), this.yOf(r)); this.board.addChild(n);
-    const b = { node:n, kind, row:r, col:c, alive:true }; this.balls.push(b); this.map.set(this.key(r,c), b); return b;
+    const b = { node:n, kind, row:r, col:c, alive:true }; this.balls.push(b); this.map.set(this.key(r,c), b);
+    if (animated) {
+      n.setScale(0.1, 0.1, 1);
+      tween(n).to(0.12, { scale: new Vec3(1.22, 1.22, 1) }).to(0.12, { scale: new Vec3(1, 1, 1) }).start();
+    }
+    return b;
   }
 
   private pointer(e: any) {
@@ -197,7 +224,7 @@ export class BubbleGame extends Component {
     const x = p.x - size.width / 2, y = p.y - size.height / 2;
     this.angle = Math.atan2(y - SHOOT_Y, x);
     this.angle = Math.max(0.28, Math.min(Math.PI - 0.28, this.angle));
-    this.drawAim(); this.aiming = true; this.toast.string = 'RELEASE · FIRE';
+    this.drawAim(); this.drawFocus(true); this.aiming = true; this.toast.string = 'RELEASE · FIRE';
   }
 
   private drawAim() {
@@ -213,20 +240,31 @@ export class BubbleGame extends Component {
     this.aim.stroke();
   }
 
+  private drawFocus(active: boolean) {
+    this.focus.clear();
+    if (!active || !['bomb', 'clone'].includes(this.shooter)) return;
+    this.focus.strokeColor.fromHEX(this.shooter === 'bomb' ? '#344054' : '#6C63FF');
+    this.focus.lineWidth = 2;
+    this.focus.circle(0, SHOOT_Y, 29);
+    this.focus.stroke();
+  }
+
   private shoot() {
     if (!this.aiming || this.shotActive) return;
-    this.aiming = false; this.aim.clear(); this.shotActive = true; this.lastShotTime = Date.now(); this.toast.string = 'SHOT IN FLIGHT';
+    this.aiming = false; this.aim.clear(); this.drawFocus(false); this.shotActive = true; this.lastShotTime = Date.now(); this.toast.string = 'SHOT IN FLIGHT';
     this.shotX = 0; this.shotY = SHOOT_Y; this.shotVX = Math.cos(this.angle) * 7; this.shotVY = Math.sin(this.angle) * 7;
     this.shotNode = new Node('Shot'); const g = this.shotNode.addComponent(Graphics);
     g.fillColor.fromHEX(COLORS[this.shooter]); g.circle(0,0,R); g.fill(); this.root.addChild(this.shotNode);
+    tween(this.shotNode).to(0.08, { scale: new Vec3(1.12, 1.12, 1) }).to(0.08, { scale: new Vec3(1, 1, 1) }).start();
   }
 
   private finishShot(hit: Ball | null) {
     if (!this.shotNode) return;
     this.shotNode.destroy(); this.shotNode = null; this.shotActive = false;
+    if (hit?.kind === 'stone') this.stoneHit(hit);
     const target = this.findAttachCell(this.shotX, this.shotY, hit);
     if (!target) { this.drawLauncher(); return; }
-    const placed = this.addBall(this.shooter, target[0], target[1]);
+    const placed = this.addBall(this.shooter, target[0], target[1], true);
     if (this.shooter === 'bomb') this.explode(placed);
     else if (this.shooter === 'clone') this.clone(placed);
     else this.resolveMatch(placed);
@@ -249,9 +287,9 @@ export class BubbleGame extends Component {
     if (!NORMAL.includes(center.kind)) return;
     const cluster = this.sameColorCluster(center);
     if (cluster.length < 3) { this.combo = 0; return; }
-    cluster.forEach(b => this.remove(b));
+    cluster.forEach((b, i) => this.remove(b, 0.045 * i));
     this.combo++; this.score += cluster.length * 10 * this.combo;
-    this.dropUnsupported(); this.flash(this.xOf(center.row,center.col),this.yOf(center.row)); this.updateHud();
+    this.dropUnsupported(); this.flash(this.xOf(center.row,center.col),this.yOf(center.row)); this.comboBurst(cluster.length, this.xOf(center.row, center.col), this.yOf(center.row)); this.updateHud();
   }
 
   private sameColorCluster(start:Ball) {
@@ -269,25 +307,37 @@ export class BubbleGame extends Component {
 
   private explode(center:Ball) {
     const targets=this.balls.filter(b=>b.alive && Math.hypot(b.row-center.row,b.col-center.col)<=1.45 && b!==center && b.kind!=='stone');
-    targets.forEach(b=>this.remove(b)); this.remove(center);
+    this.shockwave(this.xOf(center.row,center.col), this.yOf(center.row));
+    targets.forEach((b, i) => {
+      this.shakeNode(b.node, 0.07, 0.045 * i);
+      this.remove(b, 0.08 + 0.035 * i);
+    });
+    this.remove(center, 0.02);
     this.combo++; this.score += (targets.length+1)*15*this.combo;
-    this.dropUnsupported(); this.flash(this.xOf(center.row,center.col),this.yOf(center.row)); this.updateHud();
+    this.dropUnsupported(); this.flash(this.xOf(center.row,center.col),this.yOf(center.row)); this.comboBurst(targets.length + 1, this.xOf(center.row,center.col), this.yOf(center.row)); this.updateHud();
   }
 
   private clone(center:Ball) {
     const candidates=this.neighbors(center.row,center.col).map(([r,c])=>this.map.get(this.key(r,c)))
       .filter((b): b is Ball=>!!b&&b.alive&&NORMAL.includes(b.kind));
     const source=candidates[0];
-    if(!source){this.remove(center);return;}
-    const empty=this.neighbors(center.row,center.col).filter(([r,c])=>!this.map.get(this.key(r,c))?.alive);
-    empty.slice(0,2).forEach(([r,c])=>this.addBall(source.kind,r,c));
-    this.remove(center); this.combo++; this.score += empty.length*12*this.combo; this.updateHud();
+    if(!source){this.remove(center, 0.05);return;}
+    const empty=this.neighbors(center.row,center.col).filter(([r,c])=>!this.map.get(this.key(r,c))?.alive).slice(0,2);
+    this.cloneCharge(center);
+    this.scheduleOnce(() => {
+      empty.forEach(([r,c], i) => {
+        const clone = this.addBall(source.kind,r,c,true);
+        this.popOut(clone.node, center.node.position, 0.12 * i);
+      });
+      this.remove(center, 0.03);
+      this.combo++; this.score += empty.length*12*this.combo; this.comboBurst(empty.length, this.xOf(center.row,center.col), this.yOf(center.row)); this.updateHud();
+    }, 0.16);
   }
 
   private holdClone() {
     if(this.shotActive || this.shooter!=='clone') return;
     this.reservedClone=true; this.shooter=this.nextShooter; this.nextShooter='clone';
-    this.hint.string='CLONE 已保存 · 先处理当前局面，再决定何时释放'; this.drawLauncher();
+    this.hint.string='CLONE 已保存 · 先处理当前局面，再决定何时释放'; this.drawLauncher(); this.drawFocus(false);
   }
 
   private dropUnsupported() {
@@ -300,18 +350,100 @@ export class BubbleGame extends Component {
         if(n?.alive&&!connected.has(this.key(r,c))){connected.add(this.key(r,c));q.push(n);}
       }
     }
-    alive.filter(b=>b.kind!=='stone'&&!connected.has(this.key(b.row,b.col))).forEach(b=>{this.remove(b);this.score+=5;});
+    alive.filter(b=>b.kind!=='stone'&&!connected.has(this.key(b.row,b.col))).forEach((b, i)=>{this.remove(b, 0.08 + i * 0.025);this.score+=5;});
   }
 
-  private remove(b:Ball){b.alive=false;this.map.delete(this.key(b.row,b.col));b.node.destroy();}
+  private remove(b:Ball, delay = 0) {
+    if (!b.alive) return;
+    b.alive=false; this.map.delete(this.key(b.row,b.col));
+    const n = b.node;
+    tween(n)
+      .delay(delay)
+      .to(0.07, { scale: new Vec3(1.12, 1.12, 1) })
+      .to(0.12, { scale: new Vec3(0.05, 0.05, 1) })
+      .call(() => { if (n.isValid) n.destroy(); })
+      .start();
+  }
+
+  private stoneHit(stone:Ball) {
+    this.shakeNode(stone.node, 0, 0.02);
+    this.hitRing(this.xOf(stone.row,stone.col), this.yOf(stone.row));
+    this.toast.string = 'STONE HIT · BLOCKED';
+  }
+
+  private shakeNode(n:Node, duration=0.08, delay=0) {
+    const base = n.position.clone();
+    tween(n)
+      .delay(delay)
+      .to(duration / 3, { position: new Vec3(base.x + 4, base.y, base.z) })
+      .to(duration / 3, { position: new Vec3(base.x - 4, base.y, base.z) })
+      .to(duration / 3, { position: base })
+      .start();
+  }
+
+  private popOut(n:Node, from:Vec3, delay=0) {
+    const target = n.position.clone();
+    n.setPosition(from);
+    tween(n).delay(delay).to(0.18, { position: target, scale: new Vec3(1.15,1.15,1) })
+      .to(0.09, { scale: new Vec3(1,1,1) }).start();
+  }
+
+  private cloneCharge(center:Ball) {
+    tween(center.node).to(0.07, { scale: new Vec3(1.18,1.18,1) })
+      .to(0.07, { scale: new Vec3(0.82,0.82,1) })
+      .to(0.07, { scale: new Vec3(1.2,1.2,1) }).start();
+    this.hitRing(this.xOf(center.row,center.col), this.yOf(center.row));
+  }
+
+  private shockwave(x:number,y:number) {
+    const n = new Node('BombShockwave'); const g = n.addComponent(Graphics);
+    g.strokeColor.fromHEX('#263238'); g.lineWidth = 4; g.circle(0,0,16); g.stroke();
+    n.position = new Vec3(x,y); this.root.addChild(n);
+    tween(n).to(0.2, { scale: new Vec3(3.2,3.2,1) }).call(()=>n.destroy()).start();
+  }
+
+  private hitRing(x:number,y:number) {
+    const n = new Node('HitRing'); const g = n.addComponent(Graphics);
+    g.strokeColor.fromHEX('#98A2B3'); g.lineWidth = 2; g.circle(0,0,14); g.stroke();
+    n.position = new Vec3(x,y); this.root.addChild(n);
+    tween(n).to(0.16, { scale: new Vec3(1.8,1.8,1) }).call(()=>n.destroy()).start();
+  }
+
+  private comboBurst(count:number,x:number,y:number) {
+    this.spawnFloatText(`COMBO x${this.combo}`, x, y + 28, '#111827', 14);
+    this.spawnFloatText(`+${count * 10}`, x, y + 5, '#667085', 12);
+    if (this.combo >= 2) this.shakeBoard(0.055);
+  }
+
+  private spawnFloatText(textValue:string,x:number,y:number,color:string,size:number) {
+    const n = new Node('FloatText'); const l = n.addComponent(Label);
+    l.string = textValue; l.fontSize = size; l.color.fromHEX(color);
+    n.position = new Vec3(x,y); this.root.addChild(n);
+    n.setScale(0.72,0.72,1);
+    tween(n).to(0.12, { scale:new Vec3(1,1,1), position:new Vec3(x,y+8,0) })
+      .to(0.34, { position:new Vec3(x,y+34,0) })
+      .call(()=>n.destroy()).start();
+  }
+
+  private shakeBoard(duration:number) {
+    const base = this.board.position.clone();
+    tween(this.board)
+      .to(duration / 4, { position:new Vec3(base.x + 3,base.y,base.z) })
+      .to(duration / 4, { position:new Vec3(base.x - 3,base.y,base.z) })
+      .to(duration / 4, { position:new Vec3(base.x + 2,base.y,base.z) })
+      .to(duration / 4, { position:base }).start();
+  }
+
   private flash(x:number,y:number){
     this.fx.clear(); this.fx.strokeColor.fromHEX('#FFFFFF'); this.fx.lineWidth=4; this.fx.circle(x,y,30); this.fx.stroke();
     this.scheduleOnce(()=>this.fx.clear(),0.12);
   }
+
   private updateHud(){
     this.scoreLabel.string=`SCORE ${String(this.score).padStart(4,'0')}`;
     this.comboLabel.string=`COMBO x${this.combo}`;
   }
+
   private drawLauncher(){
     this.launcher.clear(); this.launcher.fillColor.fromHEX(COLORS[this.shooter]); this.launcher.circle(0,SHOOT_Y,23); this.launcher.fill();
     this.launcher.strokeColor.fromHEX('#FFFFFF'); this.launcher.lineWidth=2; this.launcher.circle(0,SHOOT_Y,17); this.launcher.stroke();
