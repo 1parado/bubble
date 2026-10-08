@@ -80,3 +80,18 @@
 > **我不仅会实现一个休闲游戏原型，还能从“特殊元素 → 玩家决策 → 关卡摆放 → 反馈 → 难度曲线”完整地思考一个休闲游戏策划问题。**
 
 当前十轮迭代到此停止。后续如果继续开发，应以真实试玩数据验证设计，而不是无止境增加功能。
+
+
+## Visual / Motion Pass
+
+The latest frontend pass focuses on **quiet, tactile motion** rather than decorative animation:
+
+- Staggered bubble entrance when a mode starts.
+- Button press compression feedback.
+- Continuous dotted trajectory preview with wall-bounce prediction.
+- Shot-in-flight state feedback.
+- Combo / success micro-feedback after resolution.
+- Cleaner status copy: **AIM → RELEASE → SHOT IN FLIGHT → COMBO**.
+- Mode switching now gives immediate visual confirmation.
+
+The interaction goal is to make the prototype feel like a designed casual game rather than a debug board, while keeping the visual language lightweight and portfolio-friendly.
