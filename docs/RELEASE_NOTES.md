@@ -14,6 +14,7 @@ A maintenance pass after the ten-iteration stop point. It adds no new scope; it 
 - **Level switching.** ◀ PREV / NEXT ▶ buttons cycle the 10 authored levels; BOMB / STONE / CLONE buttons jump to the first level of that mode; HUD shows `LV n/10 · <name>` and the level goal.
 - **Level clear detection.** Clearing the board awards +100, shows a LEVEL CLEAR popup, and auto-advances to the next level (with an ALL LEVELS CLEAR end state).
 - **Difficulty ramp by row count.** Levels 1–3 start with 7 rows, 4–6 with 8, 7–9 with 9, level 10 with 10.
+- **Web preview (`web-preview/index.html`).** A self-contained, dependency-free Canvas 2D port of `BubbleGame.ts` with identical constants, level data and resolution formulas. Runs in any browser, adapts to phone / tablet screens (responsive scaling + pointer/touch input), so the prototype is playable without installing Cocos Creator.
 
 # v0.1.0 — Ten-Iteration Stop Point
 

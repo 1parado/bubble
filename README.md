@@ -54,6 +54,12 @@
 
 ## 运行
 
+### 方式一：浏览器直接玩（免安装 Cocos）
+
+打开 [`web-preview/index.html`](web-preview/index.html) 即可，这是核心玩法的高保真 Canvas 移植版，逻辑与 Cocos 版逐行对齐（同一套常量、关卡数据与判定公式），并适配了手机 / 平板触屏与任意屏幕尺寸。
+
+### 方式二：Cocos Creator
+
 1. 安装 Cocos Creator 3.x
 2. 打开本仓库
 3. 创建 2D Scene

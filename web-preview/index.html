@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#F5F7FA">
+<title>Bubble Casual Lab — Web Preview</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #F5F7FA; overflow: hidden; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    touch-action: none; -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent; overscroll-behavior: none;
+  }
+  canvas { display: block; touch-action: none; }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+'use strict';
+// ============================================================
+// Bubble Casual Lab — Web Preview
+// Faithful Canvas 2D port of assets/scripts/BubbleGame.ts
+// (same constants, level data, scoring and resolution formulas)
+// ============================================================
+
+const NORMAL = ['red', 'yellow', 'blue', 'green'];
+const COLORS = {
+  red: '#F45B69', yellow: '#F7C948', blue: '#4D96FF', green: '#55C271',
+  bomb: '#263238', stone: '#8E98A3', clone: '#6C63FF'
+};
+const R = 20, COLS = 10, ROWS = 12, DX = 41, DY = 35, LEFT = -184, TOP = 255, SHOOT_Y = -280;
+const W = 520, H = 700;
+
+const LEVELS = [
+  { id: 1, name: 'Bomb Intro', mode: 'bomb', specials: [[3, 3]], goal: 'Make one safe bomb shot.' },
+  { id: 2, name: 'Double Burst', mode: 'bomb', specials: [[3, 3], [4, 7]], goal: 'Choose the higher-value explosion.' },
+  { id: 3, name: 'Stone Gate', mode: 'stone', specials: [[3, 3], [3, 4], [3, 5], [3, 6]], goal: 'Find a route around the barrier.' },
+  { id: 4, name: 'Bank Shot', mode: 'stone', specials: [[3, 2], [3, 3], [3, 4], [3, 5], [3, 6], [3, 7]], goal: 'Use wall bounce to reach the opening.' },
+  { id: 5, name: 'Clone Intro', mode: 'clone', specials: [[4, 4]], goal: 'Clone into a useful color cluster.' },
+  { id: 6, name: 'Save or Spend', mode: 'clone', specials: [[4, 4], [5, 7]], goal: 'Hold the clone until its value increases.' },
+  { id: 7, name: 'Burst + Route', mode: 'bomb', specials: [[3, 2], [3, 7]], goal: 'Open the board with minimal shots.' },
+  { id: 8, name: 'Stone + Clone', mode: 'clone', specials: [[3, 4], [4, 4]], goal: 'Create a cluster through constrained space.' },
+  { id: 9, name: 'Chain Test', mode: 'bomb', specials: [[2, 3], [3, 6], [5, 5]], goal: 'Build a combo from one deliberate detonation.' },
+  { id: 10, name: 'Design Review', mode: 'clone', specials: [[3, 2], [3, 3], [3, 6], [4, 6]], goal: 'Balance route, timing and payoff in one board.' }
+];
+
+// ---------------- state ----------------
+let balls = [], map = new Map();
+let shooter = 'red', nextShooter = 'blue';
+let angle = Math.PI / 2, aiming = false, shotActive = false;
+let shot = null;
+let score = 0, combo = 0, levelIndex = 0, level = 1, cleared = false, reservedClone = false;
+let toast = 'AIM · DRAG · RELEASE', hintText = '';
+let effects = [], floats = [], schedule = [], gen = 0;
+let boardShake = null;
+let time = 0;
+
+const key = (r, c) => r + ':' + c;
+const xOf = (r, c) => LEFT + c * DX + (r % 2 ? DX / 2 : 0);
+const yOf = r => TOP - r * DY;
+
+function neighbors(r, c) {
+  const even = r % 2 === 0;
+  const ds = even
+    ? [[-1,-1],[-1,0],[0,-1],[0,1],[1,-1],[1,0]]
+    : [[-1,0],[-1,1],[0,-1],[0,1],[1,0],[1,1]];
+  return ds.map(([dr, dc]) => [r + dr, c + dc]).filter(([rr, cc]) => rr >= 0 && rr < ROWS && cc >= 0 && cc < COLS);
+}
+
+function initial(r, c) {
+  const def = LEVELS[levelIndex];
+  if (def.specials.some(([sr, sc]) => sr === r && sc === c)) return def.mode;
+  return NORMAL[(r * 2 + c + levelIndex) % NORMAL.length];
+}
+
+function addBall(kind, r, c, animated) {
+  const old = map.get(key(r, c));
+  if (old && old.alive) return old;
+  const b = { kind, row: r, col: c, alive: true, gone: false, anim: null, pop: null, shake: null, fly: null, charge: null };
+  if (animated) b.anim = { type: 'pop-in', start: time };
+  balls.push(b); map.set(key(r, c), b);
+  return b;
+}
+
+function removeBall(b, delay) {
+  if (!b.alive) return;
+  b.alive = false; map.delete(key(b.row, b.col));
+  b.pop = { start: time, delay: delay || 0 };
+}
+
+function once(fn, delay) {
+  const g = gen;
+  schedule.push({ at: time + delay, fn: () => { if (g === gen) fn(); } });
+}
+
+// ---------------- game flow ----------------
+function reset() {
+  const def = LEVELS[levelIndex];
+  gen++;
+  level = def.id; cleared = false;
+  balls = []; map.clear(); effects = []; floats = []; schedule = [];
+  score = 0; combo = 0; reservedClone = false; shotActive = false; shot = null; boardShake = null;
+  hintText = def.name.toUpperCase() + ' · ' + def.goal;
+  toast = 'AIM · DRAG · RELEASE';
+  const rows = 7 + Math.floor(levelIndex / 3);
+  for (let r = 0; r < rows; r++)
+    for (let c = 0; c < COLS; c++) addBall(initial(r, c), r, c);
+  balls.forEach((b, i) => b.anim = { type: 'board-in', start: time + 0.012 * i });
+  shooter = def.mode === 'bomb' ? 'bomb' : def.mode === 'clone' ? 'clone' : NORMAL[0];
+  nextShooter = NORMAL[1];
+  updateHud();
+}
+
+function jumpToMode(mode) {
+  const idx = LEVELS.findIndex(l => l.mode === mode);
+  if (idx < 0 || idx === levelIndex) return;
+  levelIndex = idx; reset();
+}
+
+function switchLevel(dir) {
+  const idx = Math.max(0, Math.min(LEVELS.length - 1, levelIndex + dir));
+  if (idx === levelIndex) return;
+  levelIndex = idx; reset();
+}
+
+function updateHud() {
+  if (!cleared && balls.length > 0 && !balls.some(b => b.alive)) onLevelClear();
+}
+
+function onLevelClear() {
+  cleared = true;
+  score += 100;
+  floats.push({ text: 'LEVEL CLEAR · +100', x: 0, y: 60, start: time, color: '#111827', size: 16 });
+  toast = levelIndex < LEVELS.length - 1 ? 'LEVEL ' + level + ' CLEAR' : 'ALL LEVELS CLEAR';
+  once(() => {
+    if (levelIndex < LEVELS.length - 1) { levelIndex++; reset(); }
+    else toast = 'ALL LEVELS CLEAR · RESTART TO REPLAY';
+  }, 1.4);
+}
+
+function holdClone() {
+  if (shotActive || shooter !== 'clone') return;
+  reservedClone = true; shooter = nextShooter; nextShooter = 'clone';
+  hintText = 'CLONE 已保存 · 先处理当前局面，再决定何时释放';
+}
+
+function shoot() {
+  if (!aiming || shotActive) return;
+  aiming = false; shotActive = true;
+  shotX = 0; shotY = SHOOT_Y;
+  shot = { vx: Math.cos(angle) * 7, vy: Math.sin(angle) * 7 };
+  toast = 'SHOT IN FLIGHT';
+}
+
+function stoneHit(stone) {
+  stone.shake = { start: time, dur: 0.07 };
+  addEffect('ring', xOf(stone.row, stone.col), yOf(stone.row));
+  toast = 'STONE HIT · BLOCKED';
+}
+
+function finishShot(hit) {
+  shotActive = false; shot = null;
+  if (hit && hit.kind === 'stone') stoneHit(hit);
+  const target = findAttachCell(shotX, shotY, hit);
+  if (!target) { toast = 'AIM · DRAG · RELEASE'; return; }
+  const placed = addBall(shooter, target[0], target[1], true);
+  if (shooter === 'bomb') explode(placed);
+  else if (shooter === 'clone') doClone(placed);
+  else resolveMatch(placed);
+  shooter = reservedClone ? 'clone' : nextShooter;
+  reservedClone = false;
+  nextShooter = NORMAL[(score + level) % NORMAL.length];
+  updateHud();
+  if (!cleared) toast = combo > 0 ? 'COMBO x' + combo + ' · NICE' : 'AIM · DRAG · RELEASE';
+}
+
+// shot coords kept as module vars so finishShot sees final position
+let shotX = 0, shotY = SHOOT_Y;
+
+function findAttachCell(x, y, hit) {
+  const dist = rc => Math.hypot(xOf(rc[0], rc[1]) - x, yOf(rc[0]) - y);
+  let candidates = [];
+  if (hit) {
+    candidates = neighbors(hit.row, hit.col).filter(([r, c]) => !(map.get(key(r, c)) && map.get(key(r, c)).alive));
+  }
+  if (!candidates.length) {
+    for (let r = 0; r < ROWS; r++)
+      for (let c = 0; c < COLS; c++)
+        if (!(map.get(key(r, c)) && map.get(key(r, c)).alive)) candidates.push([r, c]);
+    if (!candidates.length) return null;
+  }
+  candidates.sort((a, b) => dist(a) - dist(b));
+  return candidates[0];
+}
+
+function sameColorCluster(start) {
+  const out = [], seen = new Set(), q = [start];
+  while (q.length) {
+    const b = q.shift(), k = key(b.row, b.col);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    if (!b.alive || b.kind !== start.kind) continue;
+    out.push(b);
+    for (const [r, c] of neighbors(b.row, b.col)) {
+      const n = map.get(key(r, c));
+      if (n && n.alive && !seen.has(key(r, c))) q.push(n);
+    }
+  }
+  return out;
+}
+
+function resolveMatch(center) {
+  if (!NORMAL.includes(center.kind)) return;
+  const cluster = sameColorCluster(center);
+  if (cluster.length < 3) { combo = 0; return; }
+  cluster.forEach((b, i) => removeBall(b, 0.045 * i));
+  combo++; const pts = cluster.length * 10 * combo; score += pts;
+  dropUnsupported();
+  addEffect('flash', xOf(center.row, center.col), yOf(center.row));
+  comboBurst(cluster.length, pts, xOf(center.row, center.col), yOf(center.row));
+  updateHud();
+}
+
+function explode(center) {
+  const targets = balls.filter(b => b.alive
+    && Math.hypot(b.row - center.row, b.col - center.col) <= 1.45
+    && b !== center && b.kind !== 'stone');
+  addEffect('shock', xOf(center.row, center.col), yOf(center.row));
+  targets.forEach((b, i) => {
+    b.shake = { start: time + 0.045 * i, dur: 0.07 };
+    removeBall(b, 0.08 + 0.035 * i);
+  });
+  removeBall(center, 0.02);
+  combo++; const pts = (targets.length + 1) * 15 * combo; score += pts;
+  dropUnsupported();
+  addEffect('flash', xOf(center.row, center.col), yOf(center.row));
+  comboBurst(targets.length + 1, pts, xOf(center.row, center.col), yOf(center.row));
+  updateHud();
+}
+
+function doClone(center) {
+  const candidates = neighbors(center.row, center.col)
+    .map(([r, c]) => map.get(key(r, c)))
+    .filter(b => b && b.alive && NORMAL.includes(b.kind));
+  const source = candidates[0];
+  if (!source) { removeBall(center, 0.05); return; }
+  const empty = neighbors(center.row, center.col)
+    .filter(([r, c]) => !(map.get(key(r, c)) && map.get(key(r, c)).alive)).slice(0, 2);
+  center.charge = { start: time };
+  addEffect('ring', xOf(center.row, center.col), yOf(center.row));
+  const cx = xOf(center.row, center.col), cy = yOf(center.row);
+  once(() => {
+    empty.forEach(([r, c], i) => {
+      const cl = addBall(source.kind, r, c, true);
+      cl.fly = { fromX: cx, fromY: cy, start: time + 0.12 * i };
+    });
+    removeBall(center, 0.03);
+    combo++; const pts = empty.length * 12 * combo; score += pts;
+    comboBurst(empty.length, pts, cx, cy);
+    updateHud();
+  }, 0.16);
+}
+
+function dropUnsupported() {
+  const alive = balls.filter(b => b.alive);
+  const connected = new Set();
+  const q = alive.filter(b => b.row === 0);
+  q.forEach(b => connected.add(key(b.row, b.col)));
+  while (q.length) {
+    const b = q.shift();
+    for (const [r, c] of neighbors(b.row, b.col)) {
+      const n = map.get(key(r, c));
+      if (n && n.alive && !connected.has(key(r, c))) { connected.add(key(r, c)); q.push(n); }
+    }
+  }
+  alive.filter(b => b.kind !== 'stone' && !connected.has(key(b.row, b.col)))
+    .forEach((b, i) => { removeBall(b, 0.08 + i * 0.025); score += 5; });
+}
+
+function comboBurst(count, points, x, y) {
+  floats.push({ text: 'COMBO x' + combo, x, y: y + 28, start: time, color: '#111827', size: 14 });
+  floats.push({ text: '+' + points, x, y: y + 5, start: time, color: '#667085', size: 12 });
+  if (combo >= 2) boardShake = { start: time, dur: 0.055 };
+}
+
+function addEffect(type, x, y) { effects.push({ type, x, y, start: time }); }
+
+// ---------------- effects scale helpers ----------------
+function ballScale(b) {
+  if (b.anim) {
+    const t = time - b.anim.start;
+    if (t < 0) return 0.72;
+    if (b.anim.type === 'board-in') {
+      if (t < 0.16) return 0.72 + 0.36 * (t / 0.16);
+      if (t < 0.28) return 1.08 - 0.08 * ((t - 0.16) / 0.12);
+      b.anim = null; return 1;
+    } else {
+      if (t < 0.12) return 0.1 + 1.12 * (t / 0.12);
+      if (t < 0.24) return 1.22 - 0.22 * ((t - 0.12) / 0.12);
+      b.anim = null; return 1;
+    }
+  }
+  if (b.pop) {
+    const t = time - b.pop.start - b.pop.delay;
+    if (t < 0) return 1;
+    if (t < 0.07) return 1 + 0.12 * (t / 0.07);
+    if (t < 0.19) return Math.max(0.05, 1.12 - 1.07 * ((t - 0.07) / 0.12));
+    b.gone = true;
+    return 0;
+  }
+  let s = 1;
+  if (b.charge) {
+    const t = time - b.charge.start;
+    if (t < 0.07) s = 1 + 0.18 * (t / 0.07);
+    else if (t < 0.14) s = 1.18 - 0.36 * ((t - 0.07) / 0.07);
+    else if (t < 0.21) s = 0.82 + 0.38 * ((t - 0.14) / 0.07);
+    else b.charge = null;
+  }
+  return s;
+}
+
+function ballPos(b) {
+  let x = xOf(b.row, b.col), y = yOf(b.row);
+  if (b.shake) {
+    const t = time - b.shake.start;
+    if (t >= 0) {
+      if (t < b.shake.dur / 3) x += 4;
+      else if (t < b.shake.dur * 2 / 3) x -= 4;
+      else b.shake = null;
+    }
+  }
+  if (b.fly) {
+    const t = (time - b.fly.start) / 0.18;
+    if (t >= 1) b.fly = null;
+    else if (t > 0) {
+      const tx = xOf(b.row, b.col), ty = yOf(b.row);
+      x = b.fly.fromX + (tx - b.fly.fromX) * t;
+      y = b.fly.fromY + (ty - b.fly.fromY) * t;
+    } else { x = b.fly.fromX; y = b.fly.fromY; }
+  }
+  return [x, y];
+}
+
+// ---------------- canvas setup ----------------
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let viewScale = 1;
+
+function resize() {
+  const s = Math.min(window.innerWidth / W, window.innerHeight / H);
+  const dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  const cw = Math.max(1, Math.floor(W * s)), ch = Math.max(1, Math.floor(H * s));
+  canvas.style.width = cw + 'px';
+  canvas.style.height = ch + 'px';
+  canvas.width = Math.floor(cw * dpr);
+  canvas.height = Math.floor(ch * dpr);
+  viewScale = s * dpr;
+}
+window.addEventListener('resize', resize);
+window.addEventListener('orientationchange', () => setTimeout(resize, 120));
+resize();
+
+const X = x => W / 2 + x;
+const Y = y => H / 2 - y;
+
+// ---------------- input ----------------
+const buttons = [
+  { label: 'BOMB', x: -145, y: 270, fn: () => jumpToMode('bomb'), pulse: null },
+  { label: 'STONE', x: 0, y: 270, fn: () => jumpToMode('stone'), pulse: null },
+  { label: 'CLONE', x: 145, y: 270, fn: () => jumpToMode('clone'), pulse: null },
+  { label: 'RESTART', x: 0, y: -325, fn: () => reset(), pulse: null },
+  { label: 'HOLD', x: 150, y: -285, fn: holdClone, pulse: null },
+  { label: '◀ PREV', x: -150, y: -325, fn: () => switchLevel(-1), pulse: null },
+  { label: 'NEXT ▶', x: 150, y: -325, fn: () => switchLevel(1), pulse: null }
+];
+
+function hitButton(p) {
+  for (const b of buttons) {
+    if (Math.abs(p.x - b.x) <= 55 + 8 && Math.abs(p.y - b.y) <= 16 + 8) return b;
+  }
+  return null;
+}
+
+function toCC(e) {
+  const rect = canvas.getBoundingClientRect();
+  const s = rect.width / W;
+  return { x: (e.clientX - rect.left) / s - W / 2, y: H / 2 - (e.clientY - rect.top) / s };
+}
+
+function updateAngle(p) {
+  angle = Math.atan2(p.y - SHOOT_Y, p.x);
+  angle = Math.max(0.28, Math.min(Math.PI - 0.28, angle));
+}
+
+let activePointer = null, pressedButton = null;
+
+canvas.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  if (activePointer !== null) return;
+  activePointer = e.pointerId;
+  canvas.setPointerCapture(e.pointerId);
+  const p = toCC(e);
+  const b = hitButton(p);
+  if (b) { pressedButton = b; return; }
+  if (!shotActive) {
+    updateAngle(p);
+    aiming = true;
+    toast = 'RELEASE · FIRE';
+  }
+});
+
+canvas.addEventListener('pointermove', e => {
+  if (e.pointerId !== activePointer) return;
+  e.preventDefault();
+  const p = toCC(e);
+  if (pressedButton) {
+    if (!hitButton(p)) pressedButton = null;
+    return;
+  }
+  if (aiming && !shotActive) updateAngle(p);
+});
+
+function pointerEnd(e) {
+  if (e.pointerId !== activePointer) return;
+  activePointer = null;
+  e.preventDefault();
+  const p = toCC(e);
+  if (pressedButton) {
+    const b = pressedButton; pressedButton = null;
+    if (hitButton(p) === b) {
+      b.pulse = time;
+      b.fn();
+    }
+    return;
+  }
+  if (aiming && !shotActive) shoot();
+  else aiming = false;
+}
+canvas.addEventListener('pointerup', pointerEnd);
+canvas.addEventListener('pointercancel', e => {
+  if (e.pointerId !== activePointer) return;
+  activePointer = null; pressedButton = null; aiming = false;
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+// ---------------- update ----------------
+let lastT = 0;
+function frame(t) {
+  const dt = Math.min(0.05, (t - lastT) / 1000 || 0.016);
+  lastT = t;
+  time += dt;
+  update(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+
+function update(dt) {
+  // scheduled callbacks
+  for (let i = schedule.length - 1; i >= 0; i--) {
+    if (time >= schedule[i].at) { const s = schedule.splice(i, 1)[0]; s.fn(); }
+  }
+  // shot physics (7 px/frame @60fps, same as the Cocos version)
+  if (shotActive && shot) {
+    shotX += shot.vx * dt * 60;
+    shotY += shot.vy * dt * 60;
+    if (shotX < -235 || shotX > 235) {
+      shotX = Math.max(-235, Math.min(235, shotX));
+      shot.vx *= -1;
+    }
+    let hit = null;
+    for (const b of balls) {
+      if (!b.alive) continue;
+      if (Math.hypot(xOf(b.row, b.col) - shotX, yOf(b.row) - shotY) < 35) { hit = b; break; }
+    }
+    if (hit || shotY >= TOP + 15) finishShot(hit || null);
+  }  // cleanup finished pop animations
+  for (const b of balls) ballScale(b);
+  balls = balls.filter(b => !b.gone);
+  effects = effects.filter(fx => time - fx.start < 0.24);
+  floats = floats.filter(f => time - f.start < 0.46);
+}
+
+// ---------------- render ----------------
+function setFont(size, weight, color) {
+  ctx.fillStyle = color;
+  ctx.font = (weight || '400') + ' ' + size + 'px -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+}
+
+function circlePath(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); }
+
+function roundRectPath(x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) { ctx.roundRect(x, y, w, h, r); return; }
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function hexToRgba(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+}
+
+function drawBall(b) {
+  const s = ballScale(b);
+  if (s <= 0.03) return;
+  const [bx, by] = ballPos(b);
+  ctx.save();
+  ctx.translate(X(bx), Y(by));
+  ctx.scale(s, s);
+  ctx.fillStyle = COLORS[b.kind];
+  circlePath(0, 0, R); ctx.fill();
+  ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 1.5;
+  circlePath(0, 0, R - 1); ctx.stroke();
+  if (b.kind === 'bomb') {
+    ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-8, -8); ctx.lineTo(8, 8);
+    ctx.moveTo(-8, 8); ctx.lineTo(8, -8);
+    ctx.stroke();
+  } else if (b.kind === 'clone') {
+    ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-8, 0); ctx.lineTo(8, 0);
+    ctx.moveTo(0, -8); ctx.lineTo(0, 8);
+    ctx.stroke();
+  } else if (b.kind === 'stone') {
+    ctx.fillStyle = '#667085';
+    circlePath(0, 0, 5); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function render() {
+  ctx.setTransform(viewScale, 0, 0, viewScale, 0, 0);
+  // background
+  ctx.fillStyle = '#F5F7FA';
+  ctx.fillRect(0, 0, W, H);
+  // panel
+  ctx.fillStyle = '#FFFFFF';
+  roundRectPath(X(-238), Y(-305), 476, 610, 18); ctx.fill();
+  ctx.strokeStyle = '#E5E7EB'; ctx.lineWidth = 1;
+  roundRectPath(X(-238), Y(-305), 476, 610, 18); ctx.stroke();
+
+  // texts
+  setFont(20, '600', '#111827'); ctx.fillText('Bubble Casual Lab', X(0), Y(322));
+  setFont(11, '400', '#667085'); ctx.fillText(hintText, X(0), Y(298));
+  setFont(11, '400', '#475467');
+  ctx.textAlign = 'center';
+  const def = LEVELS[levelIndex];
+  ctx.fillText('LV ' + def.id + '/' + LEVELS.length + ' · ' + def.name, X(-180), Y(298));
+  ctx.fillText('SCORE ' + String(score).padStart(4, '0'), X(-180), Y(322));
+  ctx.fillText('COMBO x' + combo, X(175), Y(322));
+
+  // board (with optional shake offset)
+  ctx.save();
+  if (boardShake) {
+    const t = time - boardShake.start, d = boardShake.dur;
+    if (t < d) {
+      const seg = t / (d / 4);
+      const off = seg < 1 ? 3 : seg < 2 ? -3 : seg < 3 ? 2 : 0;
+      ctx.translate(off, 0);
+    } else boardShake = null;
+  }
+  for (const b of balls) drawBall(b);
+  ctx.restore();
+
+  // aim trajectory (dotted, with wall-bounce prediction)
+  if (aiming && !shotActive) {
+    let x = 0, y = SHOOT_Y, vx = Math.cos(angle) * 7, vy = Math.sin(angle) * 7;
+    ctx.fillStyle = '#98A2B3';
+    for (let i = 0; i < 90; i++) {
+      x += vx; y += vy;
+      if (x < -235 || x > 235) { vx *= -1; x = Math.max(-235, Math.min(235, x)); }
+      if (i % 3 === 0) { circlePath(X(x), Y(y), 2); ctx.fill(); }
+      if (y > TOP + 10) break;
+    }
+    // focus ring for bomb / clone
+    if (shooter === 'bomb' || shooter === 'clone') {
+      ctx.strokeStyle = shooter === 'bomb' ? '#344054' : '#6C63FF';
+      ctx.lineWidth = 2;
+      circlePath(X(0), Y(SHOOT_Y), 29); ctx.stroke();
+    }
+  }
+
+  // launcher (breathing)
+  const ls = 1 + 0.035 * (0.5 - 0.5 * Math.cos(time * Math.PI * 2 / 1.8));
+  ctx.fillStyle = COLORS[shooter];
+  circlePath(X(0), Y(SHOOT_Y), 23 * ls); ctx.fill();
+  ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 2;
+  circlePath(X(0), Y(SHOOT_Y), 17 * ls); ctx.stroke();
+  if (shooter === 'bomb') {
+    ctx.lineWidth = 3; ctx.beginPath();
+    ctx.moveTo(X(-7 * ls), Y(SHOOT_Y - 7 * ls)); ctx.lineTo(X(7 * ls), Y(SHOOT_Y + 7 * ls));
+    ctx.moveTo(X(-7 * ls), Y(SHOOT_Y + 7 * ls)); ctx.lineTo(X(7 * ls), Y(SHOOT_Y - 7 * ls));
+    ctx.stroke();
+  } else if (shooter === 'clone') {
+    ctx.lineWidth = 3; ctx.beginPath();
+    ctx.moveTo(X(-7 * ls), Y(SHOOT_Y)); ctx.lineTo(X(7 * ls), Y(SHOOT_Y));
+    ctx.moveTo(X(0), Y(SHOOT_Y - 7 * ls)); ctx.lineTo(X(0), Y(SHOOT_Y + 7 * ls));
+    ctx.stroke();
+  }
+
+  // shot in flight
+  if (shotActive && shot) {
+    ctx.fillStyle = COLORS[shooter];
+    circlePath(X(shotX), Y(shotY), R); ctx.fill();
+  }
+
+  // effects
+  for (const fx of effects) {
+    const t = time - fx.start;
+    if (fx.type === 'flash') {
+      if (t < 0.12) {
+        ctx.strokeStyle = hexToRgba('#FFFFFF', 1 - t / 0.12); ctx.lineWidth = 4;
+        circlePath(X(fx.x), Y(fx.y), 30); ctx.stroke();
+      }
+    } else if (fx.type === 'shock') {
+      const k = Math.min(1, t / 0.2);
+      ctx.strokeStyle = hexToRgba('#263238', 1 - k); ctx.lineWidth = 4;
+      circlePath(X(fx.x), Y(fx.y), 16 * (1 + 2.2 * k)); ctx.stroke();
+    } else if (fx.type === 'ring') {
+      const k = Math.min(1, t / 0.16);
+      ctx.strokeStyle = hexToRgba('#98A2B3', 1 - k); ctx.lineWidth = 2;
+      circlePath(X(fx.x), Y(fx.y), 14 * (1 + 0.8 * k)); ctx.stroke();
+    }
+  }
+
+  // floating texts
+  for (const f of floats) {
+    const t = time - f.start;
+    if (t < 0) continue;
+    let sc, yy;
+    if (t < 0.12) { sc = 0.72 + 0.28 * (t / 0.12); yy = f.y + 8 * (t / 0.12); }
+    else { sc = 1; yy = f.y + 8 + 26 * ((t - 0.12) / 0.34); }
+    setFont(f.size * sc, '600', f.color);
+    ctx.fillText(f.text, X(f.x), Y(yy));
+  }
+
+  // toast
+  setFont(11, '400', '#344054');
+  ctx.fillText(toast, X(0), Y(-245));
+
+  // buttons
+  for (const b of buttons) {
+    let s = 1;
+    if (b.pulse !== null) {
+      const t = time - b.pulse;
+      if (t < 0.09) s = 0.94;
+      else { b.pulse = null; }
+    }
+    ctx.save();
+    ctx.translate(X(b.x), Y(b.y));
+    ctx.scale(s, s);
+    ctx.fillStyle = '#FFFFFF';
+    roundRectPath(-55, -16, 110, 32, 8); ctx.fill();
+    ctx.strokeStyle = '#D0D5DD'; ctx.lineWidth = 1;
+    roundRectPath(-55, -16, 110, 32, 8); ctx.stroke();
+    setFont(11, '400', '#344054');
+    ctx.fillText(b.label, 0, 0);
+    ctx.restore();
+  }
+}
+
+// ---------------- go ----------------
+reset();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
