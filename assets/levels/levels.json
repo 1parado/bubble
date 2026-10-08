@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "grid": { "columns": 10, "rows": 12 },
+  "levels": [
+    { "id": 1, "name": "Bomb Intro", "mode": "bomb", "specials": [[3,3]], "goal": "Make one safe bomb shot." },
+    { "id": 2, "name": "Double Burst", "mode": "bomb", "specials": [[3,3],[4,7]], "goal": "Choose the higher-value explosion." },
+    { "id": 3, "name": "Stone Gate", "mode": "stone", "specials": [[3,3],[3,4],[3,5],[3,6]], "goal": "Find a route around the barrier." },
+    { "id": 4, "name": "Bank Shot", "mode": "stone", "specials": [[3,2],[3,3],[3,4],[3,5],[3,6],[3,7]], "goal": "Use wall bounce to reach the opening." },
+    { "id": 5, "name": "Clone Intro", "mode": "clone", "specials": [[4,4]], "goal": "Clone into a useful color cluster." },
+    { "id": 6, "name": "Save or Spend", "mode": "clone", "specials": [[4,4],[5,7]], "goal": "Hold the clone until its value increases." },
+    { "id": 7, "name": "Burst + Route", "mode": "bomb", "specials": [[3,2],[3,7]], "goal": "Open the board with minimal shots." },
+    { "id": 8, "name": "Stone + Clone", "mode": "clone", "specials": [[3,4],[4,4]], "goal": "Create a cluster through constrained space." },
+    { "id": 9, "name": "Chain Test", "mode": "bomb", "specials": [[2,3],[3,6],[5,5]], "goal": "Build a combo from one deliberate detonation." },
+    { "id": 10, "name": "Design Review", "mode": "clone", "specials": [[3,2],[3,3],[3,6],[4,6]], "goal": "Balance route, timing and payoff in one board." }
+  ]
+}
